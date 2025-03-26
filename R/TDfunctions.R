@@ -121,7 +121,7 @@ StandardizeReadDepth <- function(df, numreads = 1e6, ntimes = 1, parallel = FALS
         
         sampled_reads <- sample(all_reads,
                                 size = numreads,
-                                replace = FALSE)
+                                replace = F)
         
         # Convert to table to count occurrences
         read_counts <- table(factor(sampled_reads, levels = 1:length(rnacol)))
@@ -342,6 +342,25 @@ StandardizeReadDepth <- function(df, numreads = 1e6, ntimes = 1, parallel = FALS
 #' @export
 mkGeneDistPlots = function (GeneExpressionMat) {
   SampleNames = colnames(GeneExpressionMat)
+  
+  
+  # Define histogram breaks (same as used in the plots)
+  bin_breaks = seq(0.1, 15, length.out = 41)
+  
+  # Calculate per-sample maximum histogram counts using only values in [0.1, 15]
+  sample_max_counts = sapply(SampleNames, function(SampleName) {
+    SampleVec = GeneExpressionMat[[SampleName]]
+    SampleVec = SampleVec[SampleVec != 0]
+    SampleVec = sort(SampleVec)
+    SampleVec = log2(SampleVec + 1)
+    # Filter to values that fall within the defined range
+    SampleVec = SampleVec[SampleVec >= 0.1 & SampleVec <= 15]
+    counts = hist(SampleVec, breaks = bin_breaks, plot = FALSE)$counts
+    print(SampleName)
+    max(counts)
+  })
+  global_y_max = max(sample_max_counts)
+  
   P50Plots = lapply(X   = SampleNames,
                     FUN = function(SampleName) {
 
@@ -355,8 +374,8 @@ mkGeneDistPlots = function (GeneExpressionMat) {
                       # Transform into the log scale so that the distribution can be visualized
                       SampleVec = log2(SampleVec + 1)
                       MedianGeneExpression = median(SampleVec)
-                      LowP50 = log2(LowP50 + 1)
-                      HighP50 = log2(HighP50 + 1)
+                      LowP50 <- mean(SampleVec[1:floor(n/2)])
+                      HighP50 <- mean(SampleVec[(ceiling(n/2) + 1):n])
 
                       P50Plot = ggplot(data    = data.frame(Values = SampleVec),
                                        mapping = aes(x = Values)) +
@@ -379,7 +398,7 @@ mkGeneDistPlots = function (GeneExpressionMat) {
                              x     = "Gene Expression (log2)",
                              y     = "# of Genes") +
                         coord_cartesian(xlim   = c(0.1,15),
-                                        ylim   = c(0, 2000), # TODO Auto standardize value across plots
+                                        ylim   = c(0, global_y_max + (global_y_max * .05)), 
                                         expand = F) +
                         theme_classic() +
                         theme(title      = element_text(size  = 20,

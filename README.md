@@ -10,14 +10,14 @@ You can install the development version of DivergenceCalculator from GitHub:
 
 ```r
 # install.packages("devtools")
-devtools::install_github("yourusername/DivergenceCalculator")
+devtools::install_github("hamsamilton/DivergenceCalculator")
 ```
 
 ## Features
 
 ### Read Depth Standardization
 
-Mapping depth is the number of exons detected by RNA-seq, or the column sum in a typical count table. We have shown that mapping depth is a key confounding technical factor when calculating transcriptional divergence, but downsampling samples to a shared mapping depth addresses this issue. Given a matrix of raw counts, this function downsamples the reads from each sample (column) to level numreads, and returns the table. Samples with a mapping depth below numreads are ignored. We have also shown that there is a key "resolution limit" of mapping depth below which there are too few reads to estimate transcriptional divergence accurately, so be cautious when setting numreads below 3e6.
+Mapping depth is the number of exons detected by RNA-seq, or the column sum in a typical count table. We have shown that mapping depth is a key confounding technical factor when calculating transcriptional divergence, but downsampling samples to a shared mapping depth addresses this issue. Given a matrix of raw counts, this function downsamples the reads from each sample (column) to level numreads, and returns the table. Samples with a mapping depth below numreads are ignored. We have also shown that there is a key "resolution limit" of mapping depth below which there are too few reads to estimate transcriptional divergence accurately, so be cautious when setting numreads below (1e6 - 3e6).
 
 ```r
 standardized_counts <- StandardizeReadDepth(
@@ -31,8 +31,9 @@ standardized_counts <- StandardizeReadDepth(
 
 Once you have normalized the read table, the function CalcDivergence is used to estimate transcriptional divergence. This returns a dataframe with 2 columns, the divergence values and the name of each sample (column)
 
+```r
 TranscriptionalDivergence <- CalcDivergence(standardized_counts)
-
+```
 
 ### Gene Expression Distribution Visualization
 
@@ -61,16 +62,8 @@ standardized_counts <- StandardizeReadDepth(expression_data, numreads = 5e5)
 dist_plots <- mkGeneDistPlots(standardized_counts)
 
 # Calculate divergence metrics
-DivergenceDf <- mkdvrgnc(standardized_counts)
+DivergenceDf <- CalcDivergence(standardized_counts)
 
-
-## Dependencies
-
-- dplyr
-- ggplot2
-- e1071
-- reldist
-- stats
 
 ## Citation
 

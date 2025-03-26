@@ -5,4 +5,7 @@ Author: Samuel Hamilton
 Maintainer: Samuel Hamilton <samilton840@gmail.com>
 Description: Package for estimating transcriptional divergence for RNA-seq data
 License: MIT + file LICENSE
-Encoding: UTF-8Roxygen: list(markdown = TRUE)RoxygenNote: 7.2.3Imports:    dplyr,    ggplot2,    e1071,    reldist,    statsSuggests:    testthat (>= 3.0.0),    knitr,    rmarkdownConfig/testthat/edition: 3VignetteBuilder: knitr
+Encoding: UTF-8Roxygen: list(markdown = TRUE)RoxygenNote: 7.2.3Imports:    dplyr,    ggplot2,    e1071,    reldist,
+    parallel,
+    doParallel,
+    foreach,    statsSuggests:    testthat (>= 3.0.0),    knitr,    rmarkdownConfig/testthat/edition: 3VignetteBuilder: knitr

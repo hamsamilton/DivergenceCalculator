@@ -22,88 +22,288 @@
 #' }
 #'
 #' @export
-StandardizeReadDepth <- function(df, numreads = 1e6, ntimes = 1) {
-  df <- as.data.frame(df,
-                      row.names = rownames(df))
-  gene_symbols = rownames(df)
-  # initialize the dataframe where the downsampled reads are stored
-  hlddf <- data.frame(row = 1:nrow(df))
-  hlddf$row <- as.factor(hlddf$row) # store indices to match reads back to genes
+StandardizeReadDepth <- function(df, numreads = 1e6, ntimes = 1, parallel = FALSE, cores = NULL, verbose = TRUE) {
+  
+  # Start timing the whole process
+  total_start_time <- Sys.time()
+  if (verbose) {
+    cat(sprintf("Starting StandardizeReadDepth at %s\n", format(total_start_time, "%H:%M:%S")))
+    cat(sprintf("Processing %d samples with %d iterations each\n", ncol(df), ntimes))
+    cat(sprintf("Target read depth: %s reads per sample\n", format(numreads, big.mark=",")))
+  }
+    
+    # Setup parallel processing
+    if (is.null(cores)) {
+      cores <- max(1, detectCores() - 1) # Use all cores minus 1 by default
 
-  #helper function that does one individual column
-  standardizereaddepth <- function(rnacol, clname = "rsmpld", ntimes, numreads = 1e6){
+    cl <- makeCluster(cores)
+    registerDoParallel(cl)
+    
+    if (verbose) {
+      cat(sprintf("Running in parallel mode with %d cores\n", cores))
+    }
+    
+    on.exit({
+      stopCluster(cl)
+      if (verbose) {
+        cat("Parallel cluster shut down successfully\n")
+      }
+    }) # Ensure cluster is stopped when function exits
+  } else {
 
+    if (verbose) {
+      cat("Running in sequential mode\n")
+    }
+  }
+  
+  df <- as.data.frame(df, row.names = rownames(df))
+  gene_symbols <- rownames(df)
+  
+  # Helper function that does one individual column
+  standardizereaddepth <- function(rnacol, clname = "rsmpld", ntimes, numreads = 1e6, verbose = TRUE) {
+    sample_start_time <- Sys.time()
+    if (verbose) {
+      cat(sprintf("[%s] Started processing sample: %s\n", format(sample_start_time, "%H:%M:%S"), clname))
+    }
+    
     hlddf <- data.frame(row = 1:length(rnacol))
     hlddf$row <- as.factor(hlddf$row)
     totreads <- sum(rnacol)
-
+    
     # Check if there are enough reads to sample
-    if(totreads < numreads){
+    if (totreads < numreads) {
       warning(paste("Warning: Sample",
                     clname,
                     "has fewer reads (", totreads, ") than requested to sample (", numreads, "). Skipping this sample."))
+      if (verbose) {
+        cat(sprintf("[%s] Skipped sample %s (insufficient reads)\n", format(Sys.time(), "%H:%M:%S"), clname))
+      }
       return(NULL)  # Return NULL instead of a dataframe with NAs
     }
-
+    
     lklihood <- rnacol / totreads
     lklihood[is.na(lklihood)] <- 0
-    for (i in 1:ntimes){
-      print(clname)
-
+    
+    if (verbose && ntimes > 1) {
+      cat(sprintf("[%s] Sample %s: Preparing for %d iterations to be averaged\n", 
+                  format(Sys.time(), "%H:%M:%S"), clname, ntimes))
+    }
+    
+    # Initialize a matrix to store counts from each iteration
+    # This will be used to calculate the average later
+    iteration_counts <- matrix(0, nrow = length(rnacol), ncol = ntimes)
+    successful_iterations <- 0
+    
+    for (i in 1:ntimes) {
+      iter_start_time <- Sys.time()
+      if (verbose && ntimes > 1) {
+        cat(sprintf("[%s] Sample %s: Starting iteration %d/%d\n", 
+                    format(iter_start_time, "%H:%M:%S"), clname, i, ntimes))
+      }
+      
       # Create a vector where each gene index is repeated by its count
       # This simulates the actual reads in the sample
       all_reads <- unlist(lapply(1:length(rnacol), function(idx) {
-        rep(idx, round(rnacol[idx]))
+        # Ensure we don't create negative or NA values when rounding
+        count <- max(0, round(rnacol[idx]))
+        if (is.na(count) || count == 0) return(NULL)
+        rep(idx, count)
       }))
-
+      
       # Now sample from all actual reads without replacement
-      if(length(all_reads) >= numreads) {
+      if (length(all_reads) >= numreads) {
+        if (verbose) {
+          cat(sprintf("[%s] Sample %s: Sampling %s reads from %s available reads\n", 
+                      format(Sys.time(), "%H:%M:%S"), clname, 
+                      format(numreads, big.mark=","), 
+                      format(length(all_reads), big.mark=",")))
+        }
+        
         sampled_reads <- sample(all_reads,
                                 size = numreads,
                                 replace = FALSE)
-
+        
         # Convert to table to count occurrences
-        smpld <- table(sampled_reads) %>%
-          as.data.frame()
-        colnames(smpld) <- c("row", clname)
-
-        # Ensure row is a factor to match hlddf
-        smpld$row <- as.factor(smpld$row)
-
-        hlddf <- left_join(hlddf, smpld, by = c("row"))
+        read_counts <- table(factor(sampled_reads, levels = 1:length(rnacol)))
+        
+        # Store the counts in our matrix
+        iteration_counts[, i] <- as.numeric(read_counts)
+        successful_iterations <- successful_iterations + 1
+        
+        iter_end_time <- Sys.time()
+        if (verbose && ntimes > 1) {
+          time_taken <- as.numeric(difftime(iter_end_time, iter_start_time, units="secs"))
+          cat(sprintf("[%s] Sample %s: Completed iteration %d/%d (%.2f seconds)\n", 
+                      format(iter_end_time, "%H:%M:%S"), clname, i, ntimes, time_taken))
+        }
       } else {
         warning(paste("Warning: Sample", clname, "has fewer actual reads (", length(all_reads),
                       ") than requested to sample (", numreads, "). Skipping this iteration."))
-        # Skip this iteration without adding the column
+        if (verbose) {
+          cat(sprintf("[%s] Sample %s: Skipped iteration %d (insufficient reads)\n", 
+                      format(Sys.time(), "%H:%M:%S"), clname, i))
+        }
+        # Skip this iteration without adding to the counts
         next
       }
     }
+    
+    # Calculate the average counts across all successful iterations
+    if (successful_iterations > 0) {
+      if (verbose && ntimes > 1) {
+        cat(sprintf("[%s] Sample %s: Calculating average across %d successful iterations\n", 
+                    format(Sys.time(), "%H:%M:%S"), clname, successful_iterations))
+      }
+      
+      # Calculate average counts
+      avg_counts <- rowSums(iteration_counts) / successful_iterations
+      
+      # Add average counts to the output dataframe
+      avg_df <- data.frame(
+        row = factor(1:length(rnacol)),
+        count = avg_counts
+      )
+      colnames(avg_df)[2] <- clname
+      
+      # Join with the main dataframe
+      hlddf <- dplyr::left_join(hlddf, avg_df, by = "row")
+    } else {
+      if (verbose) {
+        cat(sprintf("[%s] Sample %s: No successful iterations completed\n", 
+                    format(Sys.time(), "%H:%M:%S"), clname))
+      }
+      return(NULL)
+    }
+    
+    # Replace NAs with 0s
     hlddf[is.na(hlddf)] <- 0
+    
+    sample_end_time <- Sys.time()
+    time_taken <- as.numeric(difftime(sample_end_time, sample_start_time, units="secs"))
+    if (verbose) {
+      cat(sprintf("[%s] Completed sample %s in %.2f seconds\n", 
+                  format(sample_end_time, "%H:%M:%S"), clname, time_taken))
+    }
+    
     return(hlddf)
   }
-
-  # Process each column
-  for(i in 1:ncol(df)){
-    rnacol <- df[,i]
-    clname = colnames(df)[i]
-    r50out <- standardizereaddepth(rnacol   = rnacol,
-                                   clname   = clname,
-                                   ntimes   = ntimes,
-                                   numreads = numreads)
-
-    # Only join if r50out is not NULL (column had enough reads)
-    if(!is.null(r50out)) {
-      hlddf <- hlddf %>%
-        left_join(r50out, by = "row")
+  
+  # Initialize the dataframe where the downsampled reads are stored
+  init_df <- data.frame(row = 1:nrow(df))
+  init_df$row <- as.factor(init_df$row) # store indices to match reads back to genes
+  
+  # Calculate and display estimated time
+  if (verbose) {
+    cat("\n--- Processing samples ---\n")
+  }
+  
+  # Timer for progress tracking
+  start_time <- Sys.time()
+  
+  if (parallel) {
+    # Process each column in parallel
+    if (verbose) {
+      cat(sprintf("Setting up parallel processing for %d samples\n", ncol(df)))
+    }
+    
+    # Export the verbose parameter to the workers
+    results <- foreach(i = 1:ncol(df), .packages = c("dplyr")) %dopar% {
+      rnacol <- df[, i]
+      clname <- colnames(df)[i]
+      
+      standardizereaddepth(
+        rnacol = rnacol,
+        clname = clname,
+        ntimes = ntimes,
+        numreads = numreads,
+        verbose = verbose
+      )
+    }
+    
+    # Join all results with the initial dataframe
+    if (verbose) {
+      cat(sprintf("[%s] Combining results from all samples\n", format(Sys.time(), "%H:%M:%S")))
+    }
+    
+    final_df <- init_df
+    successful_samples <- 0
+    for (i in 1:length(results)) {
+      if (!is.null(results[[i]])) {
+        final_df <- dplyr::left_join(final_df, results[[i]], by = "row")
+        successful_samples <- successful_samples + 1
+      }
+    }
+    
+    if (verbose) {
+      cat(sprintf("[%s] Successfully processed %d out of %d samples\n", 
+                  format(Sys.time(), "%H:%M:%S"), successful_samples, ncol(df)))
+    }
+  } else {
+    # Sequential processing of each column
+    final_df <- init_df
+    completed <- 0
+    skipped <- 0
+    
+    for (i in 1:ncol(df)) {
+      rnacol <- df[, i]
+      clname <- colnames(df)[i]
+      
+      # Calculate and display progress
+      if (verbose && i > 1) {
+        elapsed <- as.numeric(difftime(Sys.time(), start_time, units="secs"))
+        avg_time_per_sample <- elapsed / (i - 1)
+        remaining_samples <- ncol(df) - (i - 1)
+        est_remaining_time <- avg_time_per_sample * remaining_samples
+        
+        cat(sprintf("\n[%s] Progress: %d/%d samples (%.1f%%) - Est. time remaining: %s\n", 
+                    format(Sys.time(), "%H:%M:%S"),
+                    i - 1, ncol(df), 
+                    (i - 1) / ncol(df) * 100,
+                    format(as.POSIXct(Sys.time()) + est_remaining_time, "%H:%M:%S")))
+      }
+      
+      r50out <- standardizereaddepth(
+        rnacol = rnacol,
+        clname = clname,
+        ntimes = ntimes,
+        numreads = numreads,
+        verbose = verbose
+      )
+      
+      # Only join if r50out is not NULL (column had enough reads)
+      if (!is.null(r50out)) {
+        final_df <- dplyr::left_join(final_df, r50out, by = "row")
+        completed <- completed + 1
+      } else {
+        skipped <- skipped + 1
+      }
+    }
+    
+    if (verbose) {
+      cat(sprintf("\n[%s] Processing complete - %d samples processed, %d samples skipped\n", 
+                  format(Sys.time(), "%H:%M:%S"), completed, skipped))
     }
   }
-
-  rownames(hlddf) <- gene_symbols
-  hlddf <- hlddf %>% dplyr::select(-row)
-
-  return(hlddf)
+  
+  # Set row names and clean up the dataframe
+  rownames(final_df) <- gene_symbols
+  final_df <- final_df %>% dplyr::select(-row)
+  
+  # Total execution time
+  end_time <- Sys.time()
+  total_time <- as.numeric(difftime(end_time, total_start_time, units="mins"))
+  
+  if (verbose) {
+    cat(sprintf("\n=== StandardizeReadDepth Complete ===\n"))
+    cat(sprintf("Started: %s\n", format(total_start_time, "%H:%M:%S")))
+    cat(sprintf("Finished: %s\n", format(end_time, "%H:%M:%S")))
+    cat(sprintf("Total execution time: %.2f minutes\n", total_time))
+    cat(sprintf("Final output dimensions: %d genes × %d samples\n", 
+                nrow(final_df), ncol(final_df)))
+  }
+  
+  return(final_df)
 }
-
 #' Create gene expression distribution plots
 #'
 #' @description
